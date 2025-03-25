@@ -19,16 +19,16 @@ async function start() {
 
   if (await ingredientsColl.countDocuments() === 0) {
     const initialStock = [
-      { name: "pasta", stock: 5 },
-      { name: "salsa de tomate", stock: 10 },
-      { name: "carne molida", stock: 5 },
-      { name: "lechuga", stock: 5 },
-      { name: "crutones", stock: 5 },
-      { name: "queso parmesano", stock: 5 },
-      { name: "pollo", stock: 3 },
-      { name: "masa", stock: 5 },
-      { name: "queso mozzarella", stock: 5 },
-      { name: "albahaca", stock: 5 }
+      { name: "tomato", stock: 5 },
+      { name: "lemon", stock: 5 },
+      { name: "potato", stock: 5 },
+      { name: "rice", stock: 5 },
+      { name: "ketchup", stock: 5 },
+      { name: "lettuce", stock: 5 },
+      { name: "onion", stock: 5 },
+      { name: "cheese", stock: 5 },
+      { name: "meat", stock: 5 },
+      { name: "chicken", stock: 5 }
     ];
     await ingredientsColl.insertMany(initialStock);
     console.log("ℹ Inventario inicial insertado en la base de datos de Bodega.");
@@ -65,7 +65,11 @@ async function start() {
       correlationId: corrId,
       replyTo: marketReplyQueueName
     });
+    
+    // Esperar confirmación del mercado
     await purchasePromise;
+    
+    // Registrar la compra en el historial
     await purchasesColl.insertOne({
       ingredient: ingredientName,
       quantity: quantity,
@@ -83,30 +87,54 @@ async function start() {
     console.log(`📦 Bodega recibió solicitud de ingredientes para pedido ${orderId}:`, ingredientsNeeded);
 
     try {
+      // Recopilamos primero lo que tenemos en stock y lo que debemos comprar
+      const ingredientPlan = [];
+      
       for (const item of ingredientsNeeded) {
         const name = item.name;
         const neededQty = item.quantity;
         const ingredientDoc = await ingredientsColl.findOne({ name: name });
         const currentStock = ingredientDoc ? ingredientDoc.stock : 0;
+        
         if (currentStock >= neededQty) {
-          await ingredientsColl.updateOne(
-            { name: name },
-            { $inc: { stock: -neededQty } }
-          );
-          console.log(`- Stock de "${name}" suficiente. Usando ${neededQty} del inventario (queda ${currentStock - neededQty}).`);
+          // Tenemos suficiente en stock
+          ingredientPlan.push({
+            name: name,
+            fromStock: neededQty,
+            toBuy: 0
+          });
+          console.log(`- Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock}).`);
         } else {
-          console.log(`- Stock de "${name}" insuficiente (${currentStock}/${neededQty}).`);
-          let usedFromStock = 0;
-          if (currentStock > 0) {
-            usedFromStock = currentStock;
-            await ingredientsColl.updateOne({ name: name }, { $set: { stock: 0 } });
-            console.log(`  Usando ${usedFromStock} de "${name}" del inventario (stock queda 0, faltan ${neededQty - usedFromStock}).`);
-          }
-          const lackingQty = neededQty - usedFromStock;
-          await purchaseFromMarket(orderId, name, lackingQty);
-          console.log(`  Ingrediente "${name}" ahora disponible. Cantidad ${neededQty} obtenida (incluyendo compra). Stock actual: 0.`);
+          // No hay suficiente, necesitamos comprar
+          const fromStock = currentStock;
+          const toBuy = neededQty - fromStock;
+          ingredientPlan.push({
+            name: name,
+            fromStock: fromStock,
+            toBuy: toBuy
+          });
+          console.log(`- Stock de "${name}" insuficiente (${currentStock}/${neededQty}). Se usarán ${fromStock} del stock y se comprarán ${toBuy}.`);
         }
       }
+      
+      // Realizar todas las compras necesarias primero
+      for (const item of ingredientPlan) {
+        if (item.toBuy > 0) {
+          await purchaseFromMarket(orderId, item.name, item.toBuy);
+        }
+      }
+      
+      // Una vez que todas las compras están completas, decrementamos el inventario
+      for (const item of ingredientPlan) {
+        const totalUsed = item.fromStock + item.toBuy;
+        await ingredientsColl.updateOne(
+          { name: item.name },
+          { $inc: { stock: -totalUsed } }
+        );
+        console.log(`✂ Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}.`);
+      }
+      
+      // Enviar confirmación a la cocina
       const responseMsg = { status: 'ready', orderId: orderId };
       channel.sendToQueue(msg.properties.replyTo, Buffer.from(JSON.stringify(responseMsg)), {
         correlationId: msg.properties.correlationId
