@@ -20,7 +20,7 @@ app.use(express.json());
 
 async function start() {
   await logger.initLogger();
-  await logger.info('Servicio de Bodega iniciado');
+  await logger.info('🏭 Servicio de Bodega iniciado');
   
   const client = new MongoClient(MONGO_URL);
   await client.connect();
@@ -160,7 +160,7 @@ async function start() {
   });
 
   app.listen(PORT, () => {
-    logger.info(`Servicio de Bodega escuchando en puerto ${PORT}`);
+    console.log(`Servicio de Bodega escuchando en puerto ${PORT}`);
   });
 }
 
