@@ -4,16 +4,14 @@ const { MongoClient } = require('mongodb');
 const { randomUUID } = require('crypto');
 const cors = require('cors');
 
-// Importar configuraciones y constantes
 const { PORT, RABBIT_URL, MONGO_URL, QUEUE_NAMES } = require('./config');
 const { INITIAL_STOCK } = require('./constants/inventory');
 const logger = require('./logger');
 
 const app = express();
 
-// Configurar CORS
 app.use(cors({
-  origin: '*',  // Permite todos los orígenes - ajustar en producción
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -21,7 +19,6 @@ app.use(cors({
 app.use(express.json());
 
 async function start() {
-  // Inicializar logger
   await logger.initLogger();
   await logger.info('Servicio de Bodega iniciado');
   
@@ -70,10 +67,8 @@ async function start() {
       replyTo: marketReplyQueueName
     });
     
-    // Esperar confirmación del mercado
     await purchasePromise;
     
-    // Registrar la compra en el historial
     await purchasesColl.insertOne({
       ingredient: ingredientName,
       quantity: quantity,
@@ -96,7 +91,6 @@ async function start() {
     });
 
     try {
-      // Recopilamos primero lo que tenemos en stock y lo que debemos comprar
       const ingredientPlan = [];
       
       for (const item of ingredientsNeeded) {
@@ -106,7 +100,6 @@ async function start() {
         const currentStock = ingredientDoc ? ingredientDoc.stock : 0;
         
         if (currentStock >= neededQty) {
-          // Tenemos suficiente en stock
           ingredientPlan.push({
             name: name,
             fromStock: neededQty,
@@ -114,7 +107,6 @@ async function start() {
           });
           await logger.info(`Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock})`);
         } else {
-          // No hay suficiente, necesitamos comprar
           const fromStock = currentStock;
           const toBuy = neededQty - fromStock;
           ingredientPlan.push({
@@ -126,14 +118,12 @@ async function start() {
         }
       }
       
-      // Realizar todas las compras necesarias primero
       for (const item of ingredientPlan) {
         if (item.toBuy > 0) {
           await purchaseFromMarket(orderId, item.name, item.toBuy);
         }
       }
       
-      // Una vez que todas las compras están completas, decrementamos el inventario
       for (const item of ingredientPlan) {
         const totalUsed = item.fromStock + item.toBuy;
         await ingredientsColl.updateOne(
@@ -143,7 +133,6 @@ async function start() {
         await logger.info(`Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}`);
       }
       
-      // Enviar confirmación a la cocina
       const responseMsg = { status: 'ready', orderId: orderId };
       channel.sendToQueue(msg.properties.replyTo, Buffer.from(JSON.stringify(responseMsg)), {
         correlationId: msg.properties.correlationId

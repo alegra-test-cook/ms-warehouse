@@ -1,14 +1,9 @@
-/**
- * Módulo de logging para enviar logs al servicio central
- */
 const amqp = require('amqplib');
 const { RABBIT_URL } = require('./config');
 
-// Conexión a RabbitMQ
 let channel = null;
 const LOG_QUEUE = 'system_logs';
 
-// Inicializar la conexión a RabbitMQ
 async function initLogger() {
   try {
     if (channel) return;
@@ -23,7 +18,6 @@ async function initLogger() {
   }
 }
 
-// Función para enviar un log
 async function sendLog(level, message, data = {}) {
   try {
     if (!channel) {
@@ -40,7 +34,6 @@ async function sendLog(level, message, data = {}) {
     
     channel.sendToQueue(LOG_QUEUE, Buffer.from(JSON.stringify(logEntry)));
     
-    // También imprimimos en la consola para debugging
     console.log(`[warehouse] [${level}] ${message}`);
     
     return true;
@@ -50,7 +43,6 @@ async function sendLog(level, message, data = {}) {
   }
 }
 
-// Métodos por nivel de log
 const logger = {
   initLogger,
   info: (message, data) => sendLog('info', message, data),
@@ -59,4 +51,4 @@ const logger = {
   debug: (message, data) => sendLog('debug', message, data)
 };
 
-module.exports = logger; 
+module.exports = logger;
