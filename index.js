@@ -2,15 +2,29 @@ const express = require('express');
 const amqp = require('amqplib');
 const { MongoClient } = require('mongodb');
 const { randomUUID } = require('crypto');
+const cors = require('cors');
 
 // Importar configuraciones y constantes
 const { PORT, RABBIT_URL, MONGO_URL, QUEUE_NAMES } = require('./config');
 const { INITIAL_STOCK } = require('./constants/inventory');
+const logger = require('./logger');
 
 const app = express();
+
+// Configurar CORS
+app.use(cors({
+  origin: '*',  // Permite todos los orígenes - ajustar en producción
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 async function start() {
+  // Inicializar logger
+  await logger.initLogger();
+  await logger.info('Servicio de Bodega iniciado');
+  
   const client = new MongoClient(MONGO_URL);
   await client.connect();
   const db = client.db('restaurant');
@@ -19,7 +33,7 @@ async function start() {
 
   if (await ingredientsColl.countDocuments() === 0) {
     await ingredientsColl.insertMany(INITIAL_STOCK);
-    console.log("ℹ Inventario inicial insertado en la base de datos de Bodega.");
+    await logger.info('Inventario inicial insertado en la base de datos de Bodega');
   }
 
   const connection = await amqp.connect(RABBIT_URL);
@@ -43,11 +57,13 @@ async function start() {
   });
 
   async function purchaseFromMarket(orderId, ingredientName, quantity) {
-    console.log(`👉 Solicitando al mercado ${quantity} unidad(es) de "${ingredientName}" (Pedido ${orderId}).`);
+    await logger.info(`Solicitando al mercado ${quantity} unidad(es) de "${ingredientName}" (Pedido ${orderId})`);
+    
     const corrId = randomUUID();
     const purchasePromise = new Promise(resolve => {
       pendingMarketResponses[corrId] = resolve;
     });
+    
     const purchaseMsg = { orderId: orderId, ingredient: ingredientName, quantity: quantity };
     channel.sendToQueue(QUEUE_NAMES.MARKET_REQUESTS, Buffer.from(JSON.stringify(purchaseMsg)), {
       correlationId: corrId,
@@ -64,15 +80,20 @@ async function start() {
       date: new Date(),
       orderId: orderId
     });
-    console.log(`✅ Compra completada: ${quantity} x ${ingredientName} para pedido ${orderId} (historial registrado).`);
+    
+    await logger.info(`Compra completada: ${quantity} x ${ingredientName} para pedido ${orderId} (historial registrado)`);
   }
 
   channel.consume(QUEUE_NAMES.INGREDIENT_REQUESTS, async (msg) => {
     if (!msg) return;
+    
     const request = JSON.parse(msg.content.toString());
     const orderId = request.orderId;
     const ingredientsNeeded = request.ingredients;
-    console.log(`📦 Bodega recibió solicitud de ingredientes para pedido ${orderId}:`, ingredientsNeeded);
+    
+    await logger.info(`Bodega recibió solicitud de ingredientes para pedido ${orderId}`, { 
+      ingredientsNeeded: ingredientsNeeded.map(i => `${i.quantity} x ${i.name}`).join(', ') 
+    });
 
     try {
       // Recopilamos primero lo que tenemos en stock y lo que debemos comprar
@@ -91,7 +112,7 @@ async function start() {
             fromStock: neededQty,
             toBuy: 0
           });
-          console.log(`- Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock}).`);
+          await logger.info(`Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock})`);
         } else {
           // No hay suficiente, necesitamos comprar
           const fromStock = currentStock;
@@ -101,7 +122,7 @@ async function start() {
             fromStock: fromStock,
             toBuy: toBuy
           });
-          console.log(`- Stock de "${name}" insuficiente (${currentStock}/${neededQty}). Se usarán ${fromStock} del stock y se comprarán ${toBuy}.`);
+          await logger.info(`Stock de "${name}" insuficiente (${currentStock}/${neededQty}). Se usarán ${fromStock} del stock y se comprarán ${toBuy}`);
         }
       }
       
@@ -119,7 +140,7 @@ async function start() {
           { name: item.name },
           { $inc: { stock: -totalUsed } }
         );
-        console.log(`✂ Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}.`);
+        await logger.info(`Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}`);
       }
       
       // Enviar confirmación a la cocina
@@ -127,9 +148,13 @@ async function start() {
       channel.sendToQueue(msg.properties.replyTo, Buffer.from(JSON.stringify(responseMsg)), {
         correlationId: msg.properties.correlationId
       });
-      console.log(`📨 Enviando a Cocina confirmación de ingredientes listos para pedido ${orderId}.`);
+      
+      await logger.info(`Enviando a Cocina confirmación de ingredientes listos para pedido ${orderId}`);
     } catch (error) {
-      console.error('✘ Error procesando solicitud de ingredientes en Bodega:', error);
+      await logger.error(`Error procesando solicitud de ingredientes en Bodega: ${error.message}`, { 
+        stack: error.stack, 
+        orderId 
+      });
     }
 
     channel.ack(msg);
@@ -138,18 +163,25 @@ async function start() {
   app.get('/ingredients', async (_req, res) => {
     try {
       const inventory = await ingredientsColl.find().toArray();
+      await logger.info(`Se consultó el inventario: ${inventory.length} ingredientes`);
       res.json(inventory);
     } catch (error) {
+      await logger.error(`Error obteniendo inventario: ${error.message}`, { stack: error.stack });
       res.status(500).send('Error obteniendo inventario');
     }
   });
 
   app.listen(PORT, () => {
-    console.log(`🚀 Servicio de Bodega escuchando en puerto ${PORT}`);
+    logger.info(`Servicio de Bodega escuchando en puerto ${PORT}`);
   });
 }
 
-start().catch(err => {
-  console.error('✘ Error iniciando el Servicio de Bodega:', err);
+start().catch(async err => {
+  try {
+    await logger.error(`Error iniciando el Servicio de Bodega: ${err.message}`, { stack: err.stack });
+  } catch (logError) {
+    console.error('✘ Error iniciando el Servicio de Bodega:', err);
+    console.error('Error adicional al intentar registrar el error:', logError);
+  }
   process.exit(1);
 });
