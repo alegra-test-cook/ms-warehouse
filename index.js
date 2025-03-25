@@ -54,7 +54,7 @@ async function start() {
   });
 
   async function purchaseFromMarket(orderId, ingredientName, quantity) {
-    await logger.info(`Solicitando al mercado ${quantity} unidad(es) de "${ingredientName}" (Pedido ${orderId})`);
+    await logger.info(`🛒 🛍️ Solicitando al mercado ${quantity} unidad(es) de "${ingredientName}" (Pedido ${orderId})`);
     
     const corrId = randomUUID();
     const purchasePromise = new Promise(resolve => {
@@ -76,7 +76,7 @@ async function start() {
       orderId: orderId
     });
     
-    await logger.info(`Compra completada: ${quantity} x ${ingredientName} para pedido ${orderId} (historial registrado)`);
+    await logger.info(`🚛 Compra completada: ${quantity} x ${ingredientName} para pedido ${orderId} (historial registrado)`);
   }
 
   channel.consume(QUEUE_NAMES.INGREDIENT_REQUESTS, async (msg) => {
@@ -86,7 +86,7 @@ async function start() {
     const orderId = request.orderId;
     const ingredientsNeeded = request.ingredients;
     
-    await logger.info(`Bodega recibió solicitud de ingredientes para pedido ${orderId}`, { 
+    await logger.info(`📦 Bodega recibió solicitud de ingredientes para pedido ${orderId}`, { 
       ingredientsNeeded: ingredientsNeeded.map(i => `${i.quantity} x ${i.name}`).join(', ') 
     });
 
@@ -105,7 +105,7 @@ async function start() {
             fromStock: neededQty,
             toBuy: 0
           });
-          await logger.info(`Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock})`);
+          await logger.info(`📦 Stock de "${name}" suficiente. Se usarán ${neededQty} unidades (stock actual: ${currentStock})`);
         } else {
           const fromStock = currentStock;
           const toBuy = neededQty - fromStock;
@@ -114,7 +114,7 @@ async function start() {
             fromStock: fromStock,
             toBuy: toBuy
           });
-          await logger.info(`Stock de "${name}" insuficiente (${currentStock}/${neededQty}). Se usarán ${fromStock} del stock y se comprarán ${toBuy}`);
+          await logger.info(`📦 Stock de "${name}" insuficiente (${currentStock}/${neededQty}). Se usarán ${fromStock} del stock y se comprarán ${toBuy}`);
         }
       }
       
@@ -130,7 +130,7 @@ async function start() {
           { name: item.name },
           { $inc: { stock: -totalUsed } }
         );
-        await logger.info(`Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}`);
+        await logger.info(`📦 Decrementando ${totalUsed} unidades de "${item.name}" del inventario para pedido ${orderId}`);
       }
       
       const responseMsg = { status: 'ready', orderId: orderId };
@@ -138,7 +138,7 @@ async function start() {
         correlationId: msg.properties.correlationId
       });
       
-      await logger.info(`Enviando a Cocina confirmación de ingredientes listos para pedido ${orderId}`);
+      await logger.info(`🧑‍🍳 Enviando a Cocina confirmación de ingredientes listos para pedido ${orderId}`);
     } catch (error) {
       await logger.error(`Error procesando solicitud de ingredientes en Bodega: ${error.message}`, { 
         stack: error.stack, 
@@ -152,7 +152,6 @@ async function start() {
   app.get('/ingredients', async (_req, res) => {
     try {
       const inventory = await ingredientsColl.find().toArray();
-      await logger.info(`Se consultó el inventario: ${inventory.length} ingredientes`);
       res.json(inventory);
     } catch (error) {
       await logger.error(`Error obteniendo inventario: ${error.message}`, { stack: error.stack });
