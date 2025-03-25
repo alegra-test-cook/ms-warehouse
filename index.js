@@ -3,9 +3,9 @@ const amqp = require('amqplib');
 const { MongoClient } = require('mongodb');
 const { randomUUID } = require('crypto');
 
-const PORT = process.env.PORT || 3003;
-const RABBIT_URL = process.env.RABBITMQ_URL || 'amqp://localhost';
-const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://heanfig:UBP3AqbGlPWEpdDn@alegra-test.kbne8.mongodb.net/?retryWrites=true&w=majority&appName=alegra-test';
+// Importar configuraciones y constantes
+const { PORT, RABBIT_URL, MONGO_URL, QUEUE_NAMES } = require('./config');
+const { INITIAL_STOCK } = require('./constants/inventory');
 
 const app = express();
 app.use(express.json());
@@ -18,27 +18,15 @@ async function start() {
   const purchasesColl = db.collection('purchases');
 
   if (await ingredientsColl.countDocuments() === 0) {
-    const initialStock = [
-      { name: "tomato", stock: 5 },
-      { name: "lemon", stock: 5 },
-      { name: "potato", stock: 5 },
-      { name: "rice", stock: 5 },
-      { name: "ketchup", stock: 5 },
-      { name: "lettuce", stock: 5 },
-      { name: "onion", stock: 5 },
-      { name: "cheese", stock: 5 },
-      { name: "meat", stock: 5 },
-      { name: "chicken", stock: 5 }
-    ];
-    await ingredientsColl.insertMany(initialStock);
+    await ingredientsColl.insertMany(INITIAL_STOCK);
     console.log("ℹ Inventario inicial insertado en la base de datos de Bodega.");
   }
 
   const connection = await amqp.connect(RABBIT_URL);
   const channel = await connection.createChannel();
 
-  await channel.assertQueue('ingredient_requests');
-  await channel.assertQueue('market_requests'); 
+  await channel.assertQueue(QUEUE_NAMES.INGREDIENT_REQUESTS);
+  await channel.assertQueue(QUEUE_NAMES.MARKET_REQUESTS); 
 
   const marketReplyQueue = await channel.assertQueue('', { exclusive: true });
   const marketReplyQueueName = marketReplyQueue.queue;
@@ -61,7 +49,7 @@ async function start() {
       pendingMarketResponses[corrId] = resolve;
     });
     const purchaseMsg = { orderId: orderId, ingredient: ingredientName, quantity: quantity };
-    channel.sendToQueue('market_requests', Buffer.from(JSON.stringify(purchaseMsg)), {
+    channel.sendToQueue(QUEUE_NAMES.MARKET_REQUESTS, Buffer.from(JSON.stringify(purchaseMsg)), {
       correlationId: corrId,
       replyTo: marketReplyQueueName
     });
@@ -79,7 +67,7 @@ async function start() {
     console.log(`✅ Compra completada: ${quantity} x ${ingredientName} para pedido ${orderId} (historial registrado).`);
   }
 
-  channel.consume('ingredient_requests', async (msg) => {
+  channel.consume(QUEUE_NAMES.INGREDIENT_REQUESTS, async (msg) => {
     if (!msg) return;
     const request = JSON.parse(msg.content.toString());
     const orderId = request.orderId;
